@@ -1,0 +1,204 @@
+import random
+import matplotlib.animation
+matplotlib.use("TkAgg")
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2TkAgg
+from matplotlib.figure import Figure
+import matplotlib.animation as animation
+import matplotlib.style
+import numpy as np
+import tkinter as tk
+import tkinter.ttk as ttk
+#from tkinter import ttk
+#from pykeyboard import PyKeyboard
+import threading
+import time
+import math
+from ina219 import INA219
+
+
+ina = INA219(shunt_ohms=0.1,
+             max_expected_amps = 0.6,
+             address=0x40)
+
+ina.configure(voltage_range=ina.RANGE_16V,
+              gain=ina.GAIN_AUTO,
+              bus_adc=ina.ADC_128SAMP,
+              shunt_adc=ina.ADC_128SAMP)
+
+
+#keyboard = PyKeyboard()
+xList = []
+yList = []
+
+f = Figure(figsize=(15,10), dpi = 45)
+f.set_facecolor('w')
+a = f.add_subplot(111)
+a.title.set_text("Power Produced in kW")
+matplotlib.style.use("fivethirtyeight")
+
+init = 0.0
+loop = 0
+lowerBnd = 0
+upperBnd = 60
+def animate(i): #needs to use methods that access data
+	global init
+	global loop
+	global lowerBnd, upperBnd
+	if app.start == True: # level init
+            if loop == 0 and init != 0.0:
+                    xList.clear()
+                    yList.clear()
+                    a.clear()
+                    lowerBnd = init
+                    upperBnd = init + 60
+            tmp = app.timeVar.get()
+            d0 = int(tmp[0:2])
+            d1 = int(tmp[3:5])
+            if (d1 + 1) == 60:
+                    d0 += 1
+                    if (d0 + 1) > 99:
+                            d0 = 99
+            d1 = (d1 + 1) % 60
+            if d1 < 10:	
+                    d1 = str(d1)	
+                    if d0 < 10:
+                            d0 = str(d0)		
+                            tmp = "0" + d0 + ":0" + d1
+                    else:
+                            d0 = str(d0)
+                            tmp = d0 + ":0" + d1
+            else:
+                    d1 = str(d1)
+                    if d0 < 10:
+                            d0 = str(d0)				
+                            tmp = "0" + d0 + ":" + d1
+                    else:
+                            d0 = str(d0)				
+                            tmp = d0 + ":" + d1
+            app.timeVar.set(tmp)
+            app.curVar.set(round(ina.current(),3))
+            app.curVar.set(app.curVar.get() + ' A')
+            app.voltVar.set(ina.voltage())
+            app.voltVar.set(app.voltVar.get() + " V")
+            app.powVar.set(round(ina.power(),3))
+            app.powVar.set(app.powVar.get() + ' W')
+            loop = (loop + 1)%60
+            if loop != 0 and loop%2 == 0:
+                init = init + 2
+                xList.append(init)
+                yList.append(ina.power())
+                a.set_xlabel("Time (s)")
+                a.set_ylabel("Power (kW)")
+                a.set_axis_bgcolor('white')
+                a.scatter(xList, yList, color = 'blue',)
+                a.set_ybound(0)
+                a.set_xbound(lowerBnd,upperBnd)
+            else:
+                xList.append(init)
+                yList.append(ina.power())
+                a.set_xlabel("Time (s)")
+                a.set_ylabel("Power (kW)")
+                a.set_axis_bgcolor('white')
+                a.scatter(xList, yList, color = 'blue',)
+                a.set_ybound(0)
+                a.set_xbound(lowerBnd,upperBnd)
+                #Page handler class, Manages pages(frames) of the app
+
+#initizes widgets on each page
+class PowerMonitor(tk.Tk) :
+	def __init__(self):
+		tk.Tk.__init__(self)
+		page = tk.Frame(self)
+		self.attributes("-fullscreen", True)
+		self.title("Senior Project")
+		self.columnconfigure(0, weight=1)
+		self.rowconfigure(0, weight=1)
+		self.timeVar= tk.StringVar() 
+		self.curVar= tk.StringVar()
+		self.powVar = tk.StringVar()
+		self.voltVar = tk.StringVar()
+		self.curVar.set("0 V")
+		self.voltVar.set("0 V")
+		#self.timeVar.set("Press Z key to start")
+		self.timeVar.set("00:00")
+
+		self.pages = {} 
+		self.start = True
+
+		for F in (Session, Lifetime): #initializes Pages
+			self.pages[F]= F(self,page)
+		self.show_frame(Session)
+		self.currPage = Session
+		self.bind("<Key>", self.keyPress)
+		
+	def keyPress(self,event):
+		print(event.char)
+		if (event.char) == 'z': #press z to start/reset timer and graph
+			app.pages[Session].toggleSession()
+		if (event.char) == 'c':
+			self.togglePage()
+		if (event.char) == 'x':
+                        exit()
+			
+	def togglePage(self):
+		if (self.currPage == Session):
+			self.currPage = Lifetime
+			self.show_frame(Lifetime)
+		else:
+			self.currPage = Session
+			self.show_frame(Session)
+		
+	def show_frame(self,cont):
+		self.whta = self.pages[cont]
+		self.whta.tkraise()
+
+#home screen page		
+class Session(tk.Frame):
+	def __init__(self,app, framein):
+		tk.Frame.__init__(self, app)
+		self.config(bg = "white")
+		self.app = app
+		self.currentJob = 0
+		self.config(bg="white")
+		self.grid(row = 0, column = 0, sticky= "nsew")	
+		titleLab = tk.Label(self,text="Power generated for Session", font=("Roboto", 30), bg = "white")
+		titleLab.grid(row = 1, column = 2)
+		voltLab = tk.Label(self,textvariable = app.voltVar, font=("Roboto", 30), bg = "white")
+		voltLab.grid(row = 2, column = 1, pady = (0,0), padx = (0,0))
+		powLab = tk.Label(self,textvariable = app.powVar, font=("Roboto", 30), bg = "white")
+		powLab.grid(row = 2, column = 2, pady =(0,0), padx = (0,0))
+		curLab = tk.Label(self, textvariable = app.curVar, font=("Roboto", 30), bg = "white")
+		curLab.grid(row = 2, column = 3, padx = (0,0))
+		timeLab = tk.Label(self, textvariable = app.timeVar, font=("Roboto", 20), bg = "white")
+		timeLab.grid(row = 4, column = 2)
+		canvas = FigureCanvasTkAgg(f, self)
+		#canvas.show()
+		canvas.get_tk_widget().grid(row = 6, column = 2,padx = (0,0))		
+	
+	def toggleSession(self):
+		if app.start == True:
+			app.timeVar.set("Press Z key to start")
+		else:
+			xList.clear()
+			yList.clear()	
+			a.clear()
+			global loop
+			loop = 0
+			global init 
+			init = 0.0
+			app.timeVar.set("00:00")
+		app.start = not app.start
+
+#lifetime stats page
+class Lifetime(tk.Frame):
+	def __init__(self, app,framein):
+		tk.Frame.__init__(self, app)
+		self.grid(row = 0, column = 0, sticky= "NSEW")	
+		label = tk.Label(self,text="Lifetime Power Generated", font=("Roboto", 30), bg = "white")
+		label.grid(row = 3, column = 3)			
+
+app = PowerMonitor()
+
+#aimates the clock and graph, matplotlib driven, not tk
+ani = animation.FuncAnimation(f, animate, interval = 1000)
+app.mainloop()

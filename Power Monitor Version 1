@@ -1,204 +1,236 @@
-import random
+#!/usr/bin/python3
+import ina219
+import tkinter
+import numpy
 import matplotlib.animation
+from subprocess import call
+from gpiozero import Button
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2TkAgg
 from matplotlib.figure import Figure
 import matplotlib.animation as animation
 import matplotlib.style
-import numpy as np
-import tkinter as tk
-import tkinter.ttk as ttk
-#from tkinter import ttk
-#from pykeyboard import PyKeyboard
-import threading
-import time
-import math
-from ina219 import INA219
+from gpiozero import LED
+channel = 4
+relayEnable = LED(channel)
 
+class Display(tkinter.Tk):
+    def __init__(self):
+        tkinter.Tk.__init__(self)
+        self.attributes("-fullscreen", True)     
+        self.title("WCP24 Human Powered USB Charging System")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        #relayEnable.on()
+        self.stats = self.Statistics()
+        self.curSess = self.Session()
+        self.stats.tkraise()
+        self.bind("<Key>", self.keyPress)
+    def initButton(self):
+        self.button = Button(16, hold_time=5)
+        self.button.when_pressed = self.toggleSess
+        self.button.when_held = powerOff
+        return self.button
+    def keyPress(self,event):
+        if (event.char) == 'x':
+            exit()
 
-ina = INA219(shunt_ohms=0.1,
-             max_expected_amps = 0.6,
-             address=0x40)
-
-ina.configure(voltage_range=ina.RANGE_16V,
-              gain=ina.GAIN_AUTO,
-              bus_adc=ina.ADC_128SAMP,
-              shunt_adc=ina.ADC_128SAMP)
-
-
-#keyboard = PyKeyboard()
-xList = []
-yList = []
-
-f = Figure(figsize=(15,10), dpi = 45)
-f.set_facecolor('w')
-a = f.add_subplot(111)
-a.title.set_text("Power Produced in kW")
-matplotlib.style.use("fivethirtyeight")
-
-init = 0.0
-loop = 0
-lowerBnd = 0
-upperBnd = 60
-def animate(i): #needs to use methods that access data
-	global init
-	global loop
-	global lowerBnd, upperBnd
-	if app.start == True: # level init
-            if loop == 0 and init != 0.0:
-                    xList.clear()
-                    yList.clear()
-                    a.clear()
-                    lowerBnd = init
-                    upperBnd = init + 60
-            tmp = app.timeVar.get()
-            d0 = int(tmp[0:2])
-            d1 = int(tmp[3:5])
-            if (d1 + 1) == 60:
-                    d0 += 1
-                    if (d0 + 1) > 99:
-                            d0 = 99
-            d1 = (d1 + 1) % 60
-            if d1 < 10:	
-                    d1 = str(d1)	
-                    if d0 < 10:
-                            d0 = str(d0)		
-                            tmp = "0" + d0 + ":0" + d1
-                    else:
-                            d0 = str(d0)
-                            tmp = d0 + ":0" + d1
+    def toggleSess(self):
+        if self.curSess.start == False: #use interface method
+ #          relayEnable.off()
+            self.curSess.tkraise()
+            self.curSess.start = not self.curSess.start #use interface method
+        else:
+            relayEnable.on()
+            if (self.curSess.loop > 1):
+                self.tmp = numpy.mean(self.curSess.yList)*self.curSess.loop
             else:
-                    d1 = str(d1)
-                    if d0 < 10:
-                            d0 = str(d0)				
-                            tmp = "0" + d0 + ":" + d1
-                    else:
-                            d0 = str(d0)				
-                            tmp = d0 + ":" + d1
-            app.timeVar.set(tmp)
-            app.curVar.set(round(ina.current(),3))
-            app.curVar.set(app.curVar.get() + ' A')
-            app.voltVar.set(ina.voltage())
-            app.voltVar.set(app.voltVar.get() + " V")
-            app.powVar.set(round(ina.power(),3))
-            app.powVar.set(app.powVar.get() + ' W')
-            loop = (loop + 1)%60
-            if loop != 0 and loop%2 == 0:
-                init = init + 2
-                xList.append(init)
-                yList.append(ina.power())
-                a.set_xlabel("Time (s)")
-                a.set_ylabel("Power (kW)")
-                a.set_axis_bgcolor('white')
-                a.scatter(xList, yList, color = 'blue',)
-                a.set_ybound(0)
-                a.set_xbound(lowerBnd,upperBnd)
+                self.tmp = 0
+            self.stats.sessEnergy = self.tmp
+            self.stats.lifetimeEnergy += self.tmp
+            open("LifetimeEnergy.txt",'w').close()
+            wFile = open("/home/pi/SeniorProject/LifetimeEnergy.txt",'w')
+            wFile.write(str(self.stats.lifetimeEnergy))
+            wFile.close()
+            self.stats.update()
+            self.stats.tkraise()
+            self.curSess.init = 0.0
+            self.curSess.loop = 0
+            self.curSess.lowerBnd = 0
+            self.curSess.upperBnd = 60
+            self.curSess.timeVar.set("00:00")
+            self.curSess.a.clear()
+            self.curSess.xList.clear()
+            self.curSess.yList.clear()
+            ########################
+            self.curSess.start = not self.curSess.start
+    class Statistics(tkinter.Frame):
+        def __init__(self):
+            tkinter.Frame.__init__(self)
+            self.sessEnergy = 0
+            self.lifetimeEnergy = 0
+            self.xList = []
+            self.yList = []
+            matplotlib.style.use('fivethirtyeight')
+            self.start = False
+            self.sessFig = Figure(figsize=(16,8), dpi = 120)
+            self.sessFig.set_facecolor('w')
+            self.a = self.sessFig.add_subplot(111)
+            self.a.title.set_text("Total Energy Produced")
+            self.a.set_ylabel("Energy (mJ)")
+            self.a.set_axis_bgcolor('white')
+            self.label = ['Last Session', 'Lifetime']
+            self.index = numpy.arange(len(self.label))
+            file = open("/home/pi/SeniorProject/LifetimeEnergy.txt","r")
+            self.lifetimeEnergy = float(file.read())
+            file.close()
+            self.energy = [self.sessEnergy, self.lifetimeEnergy]
+            self.a.bar(self.index,self.energy)
+            self.a.set_xticks(self.index)
+            self.a.set_xticklabels(self.label, fontsize=18)
+            self.config(bg="white")
+            self.grid(row = 0, column = 0, sticky= "nsew")
+            self.titleLab = tkinter.Label(self,text="Session and Lifetime Energy Generation", font=("Roboto", 40), bg = "white")
+            self.titleLab.grid(row = 1, column = 2)
+            canvas = FigureCanvasTkAgg(self.sessFig, self)
+            canvas.show()
+            canvas.get_tk_widget().grid(row = 2, column = 1,columnspan = 3,padx = (0,0))
+        def update(self):
+            self.a.clear()
+            self.a.title.set_text("Total Energy Produced")
+            self.a.set_ylabel("Energy (mJ)")
+            self.a.set_axis_bgcolor('white')
+            self.label = ['Last Session', 'Lifetime']
+            self.index = numpy.arange(len(self.label))
+            self.energy = [self.sessEnergy, self.lifetimeEnergy]
+            self.a.bar(self.index,self.energy)
+            self.a.set_xticks(self.index)
+            self.a.set_xticklabels(self.label)
+            self.sessFig.canvas.draw()
+    class Session(tkinter.Frame):
+        def __init__(self):
+            tkinter.Frame.__init__(self)
+            self.xList = []
+            self.yList = []
+            matplotlib.style.use('fivethirtyeight')
+            self.genSensor = self.Sensor(0.1,0.6,0x40)
+            self.start = False
+            self.sessFig = Figure(figsize=(16,7), dpi = 120)
+            self.sessFig.set_facecolor('w')
+            self.a = self.sessFig.add_subplot(111)
+            self.a.title.set_text("Power Produced in mW")
+            self.a.set_xlabel("Time (s)")
+            self.a.set_ylabel("Power (mW)")
+            self.a.set_axis_bgcolor('white')
+            self.init = 0.0
+            self.loop = 0
+            self.lowerBnd = 0
+            self.upperBnd = 60
+            self.timeVar = tkinter.StringVar() 
+            self.curVar= tkinter.StringVar()
+            self.powVar = tkinter.StringVar()
+            self.voltVar = tkinter.StringVar()
+            self.voltVar.set("0 V")
+            self.curVar.set("0 mA")
+            self.powVar.set("0 mW")
+            self.timeVar.set("00:00")
+            self.config(bg="white")
+            self.grid(row = 0, column = 0, sticky= "nsew")	
+            self.titleLab = tkinter.Label(self,text="Power generated for Session", font=("Roboto", 40), bg = "white")
+            self.titleLab.grid(row = 1, column = 2)
+            self.voltLab = tkinter.Label(self,textvariable = self.voltVar, font=("Roboto", 30), bg = "white")
+            self.voltLab.grid(row = 2, column = 1, pady = (10,0), padx = (10,0))
+            self.powLab = tkinter.Label(self,textvariable = self.powVar, font=("Roboto", 30), bg = "white")
+            self.powLab.grid(row = 2, column = 2, pady =(10,0), padx = (0,0))
+            self.curLab = tkinter.Label(self, textvariable = self.curVar, font=("Roboto", 30), bg = "white")
+            self.curLab.grid(row = 2, column = 3, pady = (10,0), padx = (0,0))
+            self.timeLab = tkinter.Label(self, textvariable = self.timeVar, font=("Roboto", 25), bg = "white")
+            self.timeLab.grid(row = 3, column = 2, pady = (25,0))
+            canvas = FigureCanvasTkAgg(self.sessFig, self)
+            canvas.show()
+            canvas.get_tk_widget().grid(row = 4, column = 1,columnspan = 3,padx = (0,0))
+        class Sensor(ina219.INA219):
+            def __init__(self, par1, par2, par3):
+                ina219.INA219.__init__(self, par1, par2, par3)
+                ina219.INA219.configure(self,voltage_range=ina219.INA219.RANGE_32V,
+                      gain=ina219.INA219.GAIN_AUTO,
+                      bus_adc=ina219.INA219.ADC_128SAMP,
+                      shunt_adc=ina219.INA219.ADC_128SAMP)
+            def getVoltage(self):
+                return self.voltage()
+            def getCurrent(self):
+                return self.current()
+            def getPower(self):
+                return self.power()	
+        def animate(self,i): #needs to use methods that access data
+            self.a.title.set_text("Power Produced in mW")
+            self.a.set_xlabel("Time (s)", fontsize=18)
+            self.a.set_ylabel("Power (mW)",fontsize = 18)
+            self.a.set_axis_bgcolor('white')
+            if (self.genSensor.getVoltage() > 12):               
+                relayEnable.off()
             else:
-                xList.append(init)
-                yList.append(ina.power())
-                a.set_xlabel("Time (s)")
-                a.set_ylabel("Power (kW)")
-                a.set_axis_bgcolor('white')
-                a.scatter(xList, yList, color = 'blue',)
-                a.set_ybound(0)
-                a.set_xbound(lowerBnd,upperBnd)
-                #Page handler class, Manages pages(frames) of the app
-
-#initizes widgets on each page
-class PowerMonitor(tk.Tk) :
-	def __init__(self):
-		tk.Tk.__init__(self)
-		page = tk.Frame(self)
-		self.attributes("-fullscreen", True)
-		self.title("Senior Project")
-		self.columnconfigure(0, weight=1)
-		self.rowconfigure(0, weight=1)
-		self.timeVar= tk.StringVar() 
-		self.curVar= tk.StringVar()
-		self.powVar = tk.StringVar()
-		self.voltVar = tk.StringVar()
-		self.curVar.set("0 V")
-		self.voltVar.set("0 V")
-		#self.timeVar.set("Press Z key to start")
-		self.timeVar.set("00:00")
-
-		self.pages = {} 
-		self.start = True
-
-		for F in (Session, Lifetime): #initializes Pages
-			self.pages[F]= F(self,page)
-		self.show_frame(Session)
-		self.currPage = Session
-		self.bind("<Key>", self.keyPress)
-		
-	def keyPress(self,event):
-		print(event.char)
-		if (event.char) == 'z': #press z to start/reset timer and graph
-			app.pages[Session].toggleSession()
-		if (event.char) == 'c':
-			self.togglePage()
-		if (event.char) == 'x':
-                        exit()
-			
-	def togglePage(self):
-		if (self.currPage == Session):
-			self.currPage = Lifetime
-			self.show_frame(Lifetime)
-		else:
-			self.currPage = Session
-			self.show_frame(Session)
-		
-	def show_frame(self,cont):
-		self.whta = self.pages[cont]
-		self.whta.tkraise()
-
-#home screen page		
-class Session(tk.Frame):
-	def __init__(self,app, framein):
-		tk.Frame.__init__(self, app)
-		self.config(bg = "white")
-		self.app = app
-		self.currentJob = 0
-		self.config(bg="white")
-		self.grid(row = 0, column = 0, sticky= "nsew")	
-		titleLab = tk.Label(self,text="Power generated for Session", font=("Roboto", 30), bg = "white")
-		titleLab.grid(row = 1, column = 2)
-		voltLab = tk.Label(self,textvariable = app.voltVar, font=("Roboto", 30), bg = "white")
-		voltLab.grid(row = 2, column = 1, pady = (0,0), padx = (0,0))
-		powLab = tk.Label(self,textvariable = app.powVar, font=("Roboto", 30), bg = "white")
-		powLab.grid(row = 2, column = 2, pady =(0,0), padx = (0,0))
-		curLab = tk.Label(self, textvariable = app.curVar, font=("Roboto", 30), bg = "white")
-		curLab.grid(row = 2, column = 3, padx = (0,0))
-		timeLab = tk.Label(self, textvariable = app.timeVar, font=("Roboto", 20), bg = "white")
-		timeLab.grid(row = 4, column = 2)
-		canvas = FigureCanvasTkAgg(f, self)
-		#canvas.show()
-		canvas.get_tk_widget().grid(row = 6, column = 2,padx = (0,0))		
-	
-	def toggleSession(self):
-		if app.start == True:
-			app.timeVar.set("Press Z key to start")
-		else:
-			xList.clear()
-			yList.clear()	
-			a.clear()
-			global loop
-			loop = 0
-			global init 
-			init = 0.0
-			app.timeVar.set("00:00")
-		app.start = not app.start
-
-#lifetime stats page
-class Lifetime(tk.Frame):
-	def __init__(self, app,framein):
-		tk.Frame.__init__(self, app)
-		self.grid(row = 0, column = 0, sticky= "NSEW")	
-		label = tk.Label(self,text="Lifetime Power Generated", font=("Roboto", 30), bg = "white")
-		label.grid(row = 3, column = 3)			
-
-app = PowerMonitor()
-
-#aimates the clock and graph, matplotlib driven, not tk
-ani = animation.FuncAnimation(f, animate, interval = 1000)
-app.mainloop()
+                relayEnable.on()
+            if self.start == True: # level init
+                if self.loop == 0 and self.init != 0.0:
+                    self.xList.clear()
+                    self.yList.clear()
+                    self.a.clear()
+                    self.lowerBnd = self.init
+                    self.upperBnd = self.init + 60
+                self.tmp = self.timeVar.get()
+                self.d0 = int(self.tmp[0:2])
+                self.d1 = int(self.tmp[3:5])
+                if (self.d1 + 1) == 60:
+                    self.d0 += 1
+                    if (self.d0 + 1) > 99:
+                        self.d0 = 99
+                self.d1 = (self.d1 + 1) % 60
+                if self.d1 < 10:	
+                    self.d1 = str(self.d1)	
+                    if self.d0 < 10:
+                        self.d0 = str(self.d0)		
+                        self.tmp = "0" + self.d0 + ":0" + self.d1
+                    else:
+                        self.d0 = str(self.d0)
+                        self.tmp = self.d0 + ":0" + self.d1
+                else:
+                    self.d1 = str(self.d1)
+                    if self.d0 < 10:
+                        self.d0 = str(self.d0)				
+                        self.tmp = "0" + self.d0 + ":" + self.d1
+                    else:
+                        self.d0 = str(self.d0)				
+                        self.tmp = self.d0 + ":" + self.d1
+                self.timeVar.set(self.tmp)
+                tmpA = round(self.genSensor.getCurrent(),1)
+                if tmpA == 0.0 or tmpA < 0:
+                    tmpA = 0
+                #if int(tmpA) == 0
+                #    tmpA = 0
+                self.curVar.set(tmpA)
+                self.curVar.set(self.curVar.get() + ' mA')
+                tmpV = round((self.genSensor.getVoltage()-11.2),1)
+                #if tmpV == 0.0 or tmpV < 0:
+                #    tmpV = 0
+                if int(tmpV) == 0:
+                    tmpV = 0
+                self.voltVar.set(tmpV)
+                self.voltVar.set(self.voltVar.get() + " V")
+                self.powVar.set(round(self.genSensor.getPower(),1))
+                self.powVar.set(self.powVar.get() + ' mW')
+                self.loop = (self.loop + 1)%60
+                if self.loop%2 == 0:
+                    self.init = self.init + 2
+                    self.xList.append(self.init)
+                    self.yList.append(self.genSensor.getPower())
+                    self.a.scatter(self.xList, self.yList, color = 'blue', s = 100)
+                    self.a.set_ybound(0)
+                    self.a.set_xbound(self.lowerBnd,self.upperBnd)
+def powerOff():
+    call("sudo shutdown now", shell=True)
+    
+powerMonitor = Display()
+rstButton = powerMonitor.initButton()
+ani = animation.FuncAnimation(powerMonitor.curSess.sessFig, powerMonitor.curSess.animate, interval = 1000)
+powerMonitor.mainloop()
